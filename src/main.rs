@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use clap::Parser;
-use reqwest::Url;
-use std::str::FromStr;
+use reqwest::{header, Client, Response, Url};
+use std::{collections::HashMap, str::FromStr};
 
 // 定义 HTTPie 的 CLI 主入口，它包含若干个子命令
 // 下面 /// 的注释是文档，clap 会将其作为 CLI 的帮助
@@ -79,7 +79,79 @@ fn parse_url(s: &str) -> Result<String> {
     Ok(s.into())
 }
 
-fn main() {
+async fn get(client: Client, args: &Get) -> Result<()> {
+    let resp = client.get(&args.url).send().await?;
+    println!("{:?}", resp.text().await?);
+
+    Ok(())
+}
+
+async fn post(client: Client, args: &Post) -> Result<()> {
+    let mut body = HashMap::new();
+
+    for pair in args.body.iter() {
+        body.insert(&pair.k, &pair.v);
+    }
+
+    let resp = client.post(&args.url).json(&body).send().await?;
+
+    println!("{:?}", resp.text().await?);
+
+    Ok(())
+}
+
+// 程序的入口函数，在 http 请求时使用了异步处理，所以引入 tokio
+#[tokio::main]
+async fn main() -> Result<()> {
     let opts: Opts = Opts::parse();
-    println!("{:?}", opts);
+    let mut headers = header::HeaderMap::new();
+
+    // 为 http 客户端添加一些缺省的 HTTP 头
+    headers.insert("X-POWERED-BY", "Rust".parse()?);
+    headers.insert(header::USER_AGENT, "Rust Httpie".parse()?);
+
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()?;
+
+    let result = match opts.subcmd {
+        SubCommand::Get(ref args) => get(client, args).await?,
+        SubCommand::Post(ref args) => post(client, args).await?,
+    };
+
+    Ok(result)
+}
+
+// 仅在 cargo test 时才编译
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_url_works() {
+        assert!(parse_url("aaa").is_err());
+        assert!(parse_url("https://abc.xyz").is_ok());
+        assert!(parse_url("https://httpbin.org/post").is_ok());
+    }
+
+    #[test]
+    fn parse_kv_pair_works() {
+        assert!(parse_kv_pair("a").is_err());
+
+        assert_eq!(
+            parse_kv_pair("a=1").unwrap(),
+            KvPair {
+                k: "a".into(),
+                v: "1".into()
+            }
+        );
+
+        assert_eq!(
+            parse_kv_pair("b=").unwrap(),
+            KvPair {
+                k: "b".into(),
+                v: "".into()
+            }
+        )
+    }
 }
